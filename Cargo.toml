@@ -1,0 +1,7 @@
+[package]
+name = "mineworldexport"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+quartz_nbt = "0.2.8"
