@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::Seek;
 use std::io::SeekFrom;
 use std::convert::AsRef;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 fn main() {
     // Read CLI arguments
@@ -12,26 +12,30 @@ fn main() {
     let world_in = args.next().expect("Invalid arguments. World directory expected.");
     let world_out = format!("{world_in}_RELEASE");
 
+    let world_in = Path::new(&world_in);
+    let world_out = Path::new(&world_out);
+
 
     // Check source directory is a valid Minecraft Java Edition world
-    let source_level_dat_file: PathBuf = [&world_in, "level.dat"].iter().collect();
-    if ! file_exists(&source_level_dat_file) {
-        eprintln!("\"{world_in}\" is not a valid Minecraft Java Edition world");
+    let level_dat = Path::new("level.dat");
+    let source_level_dat_file = world_in.join(&level_dat);
+    if ! source_level_dat_file.is_file() {
+        eprintln!("\"{}\" is not a valid Minecraft Java Edition world", world_in.display());
         return;
     }
 
 
     // Prepare the release world directory
-    if is_dir(&world_out) {
-        std::fs::remove_dir_all(&world_out).expect(format!("Cannot remove directory \"{world_out}\"").as_ref());
-        println!("- Removed previous release directory \"{world_out}\"");
+    if world_out.is_dir() {
+        std::fs::remove_dir_all(&world_out).expect(format!("Cannot remove directory \"{}\"", world_out.display()).as_ref());
+        println!("- Removed previous release directory \"{}\"", world_out.display());
     }
-    clone_directory_recursively(&world_in, &world_out).expect(format!("Cannot clone directory \"{world_out}\"").as_ref());
-    println!("- Created \"{world_out}\" release world");
+    clone_directory_recursively(&world_in, &world_out).expect(format!("Cannot clone directory \"{}\"", world_out.display()).as_ref());
+    println!("- Created \"{}\" release world", world_out.display());
 
 
     // Clean up release level.dat file
-    let dest_level_dat_file: PathBuf = [&world_out, "level.dat"].iter().collect();
+    let dest_level_dat_file = world_out.join(&level_dat);
     let mut file = File::options().read(true).write(true).open(dest_level_dat_file).expect("Cannot read level.dat file");
     let (mut root_nbt, root_name) = io::read_nbt(&mut file, Flavor::GzCompressed).expect("Error when reading level.dat file");
     let data = root_nbt.get_mut::<_, &mut NbtCompound>("Data").expect("This file doesn't contain a Data tag");
@@ -43,8 +47,10 @@ fn main() {
 
     // Set allowCommands to false in level.dat to disable cheats
     if let Ok(allow_commands) = data.get_mut::<_, &mut i8>("allowCommands") {
-        *allow_commands = 0;
-        println!("- Set allowCommands = 0 to disable cheats");
+        if *allow_commands != 0 {
+            *allow_commands = 0;
+            println!("- Set allowCommands = 0 to disable cheats in level.dat");
+        }
     }
 
     // Overwrite level.dat
@@ -54,64 +60,57 @@ fn main() {
 
 
     // Remove unnecessary files from release
-    let dest_level_dat_old_file: PathBuf = [&world_out, "level.dat_old"].iter().collect();
-    if file_exists(&dest_level_dat_old_file) {
-        // TODO: Handle errors
-        let _ = std::fs::remove_file(&dest_level_dat_old_file);
-        println!("- Removed level.dat_old file");
-    }
-
-    let dest_level_dat_old_file: PathBuf = [&world_out, "session.lock"].iter().collect();
-    if file_exists(&dest_level_dat_old_file) {
-        // TODO: Handle errors
-        let _ = std::fs::remove_file(&dest_level_dat_old_file);
-        println!("- Removed session.lock file");
-    }
-
-    // Remove all files from DEST/advancements
-    let dest_advancements_dir: PathBuf = [&world_out, "advancements"].iter().collect();
-    if let Err(e) = remove_all_files_from_directory(&dest_advancements_dir) {
-        eprintln!("Cannot empty advancements directory");
-        eprintln!("{}", e.to_string());
-        return;
-    }
-    println!("- Emptied advancements directory");
-
-    // Remove all files from DEST/playerdata
-    let dest_advancements_dir: PathBuf = [&world_out, "playerdata"].iter().collect();
-    if let Err(e) = remove_all_files_from_directory(&dest_advancements_dir) {
-        eprintln!("Cannot empty playerdata directory");
-        eprintln!("{}", e.to_string());
-        return;
-    }
-    println!("- Emptied playerdata directory");
-
-    // Remove all files from DEST/stats
-    let dest_advancements_dir: PathBuf = [&world_out, "stats"].iter().collect();
-    if let Err(e) = remove_all_files_from_directory(&dest_advancements_dir) {
-        eprintln!("Cannot empty stats directory");
-        eprintln!("{}", e.to_string());
-        return;
-    }
-    println!("- Emptied stats directory");
-
-    // Remove DEST/data/scoreboard.dat
-    let dest_scoreboard_file: PathBuf = [&world_out, "data", "scoreboard.dat"].iter().collect();
-    if file_exists(&dest_scoreboard_file) {
-        if let Err(e) = std::fs::remove_file(&dest_scoreboard_file) {
-            eprintln!("Cannot remove \"data/scoreboard.dat\" file");
-            eprintln!("{}", e.to_string());
-            return;
+    let remove_files = [
+        Path::new("level.dat_old"),
+        Path::new("session.lock"),
+        Path::new("data/scoreboard.dat")
+    ];
+    for file in remove_files {
+        let file_name = file.display();
+        let file = world_out.join(file);
+        if file.is_file() {
+            match std::fs::remove_file(&file) {
+                Ok(_) => println!("- Removed file {file_name}"),
+                Err(e) => {
+                    eprintln!("Error when deleting file {file_name}");
+                    eprintln!("{e}");
+                }
+            }
         }
-        println!("- Removed data/scoreboard.dat file");
+    }
+
+    // Empty selected directories
+    let directories = [
+        Path::new("advancements"),
+        Path::new("playerdata"),
+        Path::new("stats")
+    ];
+    for directory in directories {
+        let directory_name = directory.display();
+        let directory = world_out.join(directory);
+        if directory.is_dir() {
+            match empty_directory(&directory) {
+                Ok(delete_count) => {
+                    if delete_count > 0 {
+                        println!("- Emptied directory {directory_name}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error when removing all files from directory {directory_name}");
+                    eprintln!("{e}");
+                }
+            }
+        }
     }
 
     println!("Done!");
 }
 
-fn clone_directory_recursively<T: AsRef<Path>>(source_directory: T, destination_directory: T) -> Result<(), String> {
-    if ! is_dir(&source_directory) {
-        return Err(format!("\"{}\" is not a directory", source_directory.as_ref().to_str().unwrap_or("")));
+fn clone_directory_recursively<T: AsRef<Path>>(source_directory: &T, destination_directory: &T) -> Result<(), String> {
+    let source_directory = source_directory.as_ref();
+    let destination_directory = destination_directory.as_ref();
+    if ! source_directory.is_dir() {
+        return Err(format!("\"{}\" is not a directory", source_directory.display()));
     }
 
     let entries = std::fs::read_dir(&source_directory).map_err(|e| e.to_string())?;
@@ -119,7 +118,7 @@ fn clone_directory_recursively<T: AsRef<Path>>(source_directory: T, destination_
         let entry = entry.map_err(|e| e.to_string())?;
         let entry_type = entry.file_type() .map_err(|e| e.to_string())?;
         if entry_type.is_file() {
-            let dest_file_dir = destination_directory.as_ref().join(entry.file_name());
+            let dest_file_dir = destination_directory.join(entry.file_name());
             {
                 let _ = std::fs::File::create(&dest_file_dir).map_err(|e| e.to_string())?;
                 // Close file
@@ -127,7 +126,7 @@ fn clone_directory_recursively<T: AsRef<Path>>(source_directory: T, destination_
             // std::copy() copies all content from one file to another and it also copies the permission bits
             std::fs::copy(entry.path(), dest_file_dir).map_err(|e| e.to_string())?;
         } else if entry_type.is_dir() {
-            let dest_dir = destination_directory.as_ref().join(entry.file_name());
+            let dest_dir = destination_directory.join(entry.file_name());
             let _ = std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
 
             // Copy all entries from this directory recursively
@@ -140,28 +139,17 @@ fn clone_directory_recursively<T: AsRef<Path>>(source_directory: T, destination_
     Ok(())
 }
 
-fn remove_all_files_from_directory<T: AsRef<Path>>(directory: &T) -> Result<(), String> {
+fn empty_directory<T: AsRef<Path>>(directory: &T) -> Result<usize, String> {
+    // Remove all files from the directory
     let entries = std::fs::read_dir(&directory).map_err(|e| e.to_string())?;
+    let mut count = 0;
     for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
         let entry_type = entry.file_type() .map_err(|e| e.to_string())?;
         if entry_type.is_file() {
             std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
+            count += 1;
         }
     }
-    Ok(())
-}
-
-fn is_dir<T: AsRef<Path>>(directory: &T) -> bool {
-    match std::fs::metadata(directory) {
-        Ok(m) => m.is_dir(),
-        Err(_) => false
-    }
-}
-
-fn file_exists<T: AsRef<Path>>(file_path: &T) -> bool {
-    match std::fs::metadata(file_path) {
-        Ok(m) => m.is_file(),
-        Err(_) => false
-    }
+    Ok(count)
 }
